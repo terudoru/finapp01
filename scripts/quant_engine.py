@@ -33,8 +33,12 @@ def add_time_series_features(df, use_sma=True, use_rsi=True, use_macd=True, use_
         features.append('OBV')
         
     if use_sma:
-        df['SMA_20'] = df['Close'].rolling(window=20).mean()
-        df['SMA_50'] = df['Close'].rolling(window=50).mean()
+        # データ量が少ない（年足など）場合はSMAの期間を短縮する
+        w_short = 20 if len(df) >= 30 else max(3, len(df) // 3)
+        w_long = 50 if len(df) >= 60 else max(5, len(df) // 2)
+        
+        df['SMA_20'] = df['Close'].rolling(window=w_short).mean()
+        df['SMA_50'] = df['Close'].rolling(window=w_long).mean()
         # 乖離率 (モメンタム)
         df['Close_to_SMA20'] = (df['Close'] / df['SMA_20']) - 1.0
         features.extend(['SMA_20', 'SMA_50', 'Close_to_SMA20'])
@@ -44,24 +48,24 @@ def add_time_series_features(df, use_sma=True, use_rsi=True, use_macd=True, use_
         df['RSI'] = indicator_rsi.rsi()
         features.append('RSI')
         
-        # Stochastic Oscillator も追加
-        indicator_stoch = StochasticOscillator(high=df["High"], low=df["Low"], close=df["Close"], window=14, smooth_window=3)
+        # Stochastic Oscillator も追加 (データ長に合わせる)
+        indicator_stoch = StochasticOscillator(high=df["High"], low=df["Low"], close=df["Close"], window=min(14, max(3, len(df)-1)), smooth_window=min(3, max(1, len(df)-2)))
         df['Stoch_k'] = indicator_stoch.stoch()
         features.append('Stoch_k')
         
     if use_macd:
-        indicator_macd = MACD(close=df["Close"])
+        indicator_macd = MACD(close=df["Close"], window_slow=min(26, max(6, len(df)-1)), window_fast=min(12, max(3, len(df)-3)), window_sign=max(3, min(9, len(df)-5)))
         df['MACD'] = indicator_macd.macd()
         df['MACD_Signal'] = indicator_macd.macd_signal()
         features.extend(['MACD', 'MACD_Signal'])
         
     if use_bb:
-        indicator_bb = BollingerBands(close=df["Close"], window=20, window_dev=2)
+        indicator_bb = BollingerBands(close=df["Close"], window=min(20, max(5, len(df)-1)), window_dev=2)
         df['BB_Width'] = indicator_bb.bollinger_wband()
         features.append('BB_Width')
         
     # ATR を特徴量としても追加
-    df['ATR_Feature'] = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range()
+    df['ATR_Feature'] = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=min(14, max(3, len(df)-1))).average_true_range()
     features.append('ATR_Feature')
     
     # カレンダー特徴量
@@ -93,6 +97,8 @@ def get_xgb_model(X_train, y_train, auto_tune=True):
         rs.fit(X_train, y_train)
         return rs.best_estimator_
     else:
-        model = XGBClassifier(n_estimators=100, learning_rate=0.05, max_depth=4, random_state=42, eval_metric="logloss")
+        # データが極端に少ない場合は深さを浅くして過学習を防ぐ
+        max_d = 4 if len(X_train) >= 30 else 2
+        model = XGBClassifier(n_estimators=100, learning_rate=0.05, max_depth=max_d, random_state=42, eval_metric="logloss")
         model.fit(X_train, y_train)
         return model

@@ -226,14 +226,21 @@ else:
 
 # 期間の設定
 today = datetime.date.today()
-default_start = today - datetime.timedelta(days=365*4) # 4年前
-start_date = st.sidebar.date_input("開始日 (日足用)", value=default_start)
-end_date = st.sidebar.date_input("終了日 (日足用)", value=today)
+default_start = today - datetime.timedelta(days=365*20) # 20年前 (大過去対応)
+start_date = st.sidebar.date_input("開始日 (長期分析用)", value=default_start)
+end_date = st.sidebar.date_input("終了日", value=today)
 
 st.sidebar.markdown("---")
 st.sidebar.header("⏱️ タイムフレーム設定")
-timeframe_opts = {"1日 (日足)": "1d", "1時間 (スイング)": "1h", "5分 (デイトレ)": "5m"}
-selected_tf_label = st.sidebar.selectbox("データ間隔", list(timeframe_opts.keys()))
+timeframe_opts = {
+    "1年 (年足 - 超長期)": "1y",
+    "1ヶ月 (月足)": "1mo",
+    "1週 (週足)": "1wk",
+    "1日 (日足)": "1d",
+    "1時間 (スイング)": "1h",
+    "5分 (デイトレ)": "5m"
+}
+selected_tf_label = st.sidebar.selectbox("データ間隔", list(timeframe_opts.keys()), index=3) # デフォルトは「1日 (日足)」
 timeframe = timeframe_opts[selected_tf_label]
 is_crypto = (selected_category == "🪙 仮想通貨")
 
@@ -283,11 +290,35 @@ def get_ticker_info(ticker):
 def fetch_data(t, start, end, tf, is_crypto):
     if is_crypto:
         exchange = ccxt.binance()
-        # BinanceからCCXTを使ってOHLCVを取得
-        ohlcv = exchange.fetch_ohlcv(t, timeframe=tf, limit=1000)
-        df = pd.DataFrame(ohlcv, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        df['Date'] = pd.to_datetime(df['Date'], unit='ms')
-        df.set_index('Date', inplace=True)
+        c_tf = {'1wk': '1w', '1mo': '1M', '1y': '1M'}.get(tf, tf)
+        start_ts = int(pd.Timestamp(start).timestamp() * 1000)
+        end_ts = int((pd.Timestamp(end) + pd.Timedelta(days=1)).timestamp() * 1000)
+        
+        all_ohlcv = []
+        try:
+            while True:
+                ohlcv = exchange.fetch_ohlcv(t, timeframe=c_tf, since=start_ts, limit=1000)
+                if not ohlcv: break
+                all_ohlcv.extend(ohlcv)
+                start_ts = ohlcv[-1][0] + 1
+                if ohlcv[-1][0] >= end_ts or len(ohlcv) < 1000: break
+                if len(all_ohlcv) >= 10000: break # セーフティストップ
+        except:
+            if not all_ohlcv:
+                all_ohlcv = exchange.fetch_ohlcv(t, timeframe='1d', limit=1000)
+                
+        df = pd.DataFrame(all_ohlcv, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        if not df.empty:
+            df['Date'] = pd.to_datetime(df['Date'], unit='ms')
+            df.set_index('Date', inplace=True)
+            df = df[~df.index.duplicated(keep='last')]
+        
+        if tf == '1y' and not df.empty:
+            try:
+                df = df.resample('YE').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+            except:
+                df = df.resample('Y').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+                
         return df
     else:
         # yfinanceの制限対応
@@ -299,9 +330,17 @@ def fetch_data(t, start, end, tf, is_crypto):
         elif tf == '1h':
             target_start = max(start, today - datetime.timedelta(days=729))
             
-        df = yf.download(t, start=target_start, end=end + datetime.timedelta(days=1), interval=tf, progress=False)
+        fetch_tf = '1mo' if tf == '1y' else tf
+        df = yf.download(t, start=target_start, end=end + datetime.timedelta(days=1), interval=fetch_tf, progress=False)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
+            
+        if tf == '1y' and not df.empty:
+            try:
+                df = df.resample('YE').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+            except:
+                df = df.resample('Y').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+                
         return df
 
 @st.cache_data(ttl="1h")
@@ -965,25 +1004,29 @@ if app_mode == "🏆 AI 一斉スクリーナー (買い/売り)":
                 
                 try:
                     df = fetch_data(tic, start_date, end_date, timeframe, is_cry)
-                    if df.empty or len(df) < 50:
+                    if df.empty or len(df) < (5 if timeframe == '1y' else 30):
                         continue
                         
                     df, features = add_time_series_features(df, use_sma, use_rsi, use_macd, use_bb)
                     
-                    if not is_cry and timeframe == '1d':
+                    if not is_cry:
                         vix_df = fetch_vix(start_date, end_date)
                         if not vix_df.empty:
-                            df = df.join(vix_df, how='left')
+                            df = df.sort_index()
+                            vix_df = vix_df.sort_index()
+                            df = pd.merge_asof(df, vix_df[['VIX_Close']], left_index=True, right_index=True, direction='backward')
                             df['VIX_Close'] = df['VIX_Close'].ffill()
                             features.append('VIX_Close')
                         
                     ml_df = df.dropna().copy()
-                    if len(ml_df) < 30:
+                    if len(ml_df) < (3 if timeframe == '1y' else 10):
                         continue
                         
                     X = ml_df[features]
                     y = ml_df['Target']
-                    model = train_and_cache_model(tic, timeframe, start_date, end_date, auto_tune, X, y)
+                    
+                    # 複数銘柄を一斉処理するため、超重いAutoTuneは強制的に無効化
+                    model = train_and_cache_model(tic, timeframe, start_date, end_date, False, X, y)
                     
                     latest_features = df.iloc[-1:][features]
                     if latest_features.isna().any().any():
@@ -1068,25 +1111,29 @@ if app_mode == "💡 おすすめ銘柄推薦":
                 
                 try:
                     df = fetch_data(tic, start_date, end_date, timeframe, is_cry)
-                    if df.empty or len(df) < 50:
+                    if df.empty or len(df) < (5 if timeframe == '1y' else 30):
                         continue
                         
                     df, features = add_time_series_features(df, use_sma, use_rsi, use_macd, use_bb)
                     
-                    if not is_cry and timeframe == '1d':
+                    if not is_cry:
                         vix_df = fetch_vix(start_date, end_date)
                         if not vix_df.empty:
-                            df = df.join(vix_df, how='left')
+                            df = df.sort_index()
+                            vix_df = vix_df.sort_index()
+                            df = pd.merge_asof(df, vix_df[['VIX_Close']], left_index=True, right_index=True, direction='backward')
                             df['VIX_Close'] = df['VIX_Close'].ffill()
                             features.append('VIX_Close')
                         
                     ml_df = df.dropna().copy()
-                    if len(ml_df) < 30:
+                    if len(ml_df) < (3 if timeframe == '1y' else 10):
                         continue
                         
                     X = ml_df[features]
                     y = ml_df['Target']
-                    model = train_and_cache_model(tic, timeframe, start_date, end_date, auto_tune, X, y)
+                    
+                    # 高速化のため強制的にAutoTune無効化
+                    model = train_and_cache_model(tic, timeframe, start_date, end_date, False, X, y)
                     
                     latest_features = df.iloc[-1:][features]
                     if latest_features.isna().any().any():
@@ -1139,8 +1186,17 @@ if app_mode == "💡 おすすめ銘柄推薦":
                     if latest_macd < latest_sig:
                         wait_days += 1
                         
-                    wait_days = min(max(wait_days, 0), 5) # 最大5日まで
-                    buy_timing_str = "🚀 今すぐ" if wait_days == 0 else f"⏳ 約{wait_days}日後"
+                    wait_days = min(max(wait_days, 0), 5) # 最大5単位まで
+                    
+                    # タイムフレームに合わせた単位を設定
+                    tf_unit = "日"
+                    if timeframe == '1mo': tf_unit = "ヶ月"
+                    elif timeframe == '1wk': tf_unit = "週間"
+                    elif timeframe == '1y': tf_unit = "年"
+                    elif timeframe == '1h': tf_unit = "時間"
+                    elif timeframe == '5m': tf_unit = "回(5分足)"
+                    
+                    buy_timing_str = "🚀 今すぐ" if wait_days == 0 else f"⏳ 約{wait_days}{tf_unit}後"
 
                     # ============== スコア計算 ==============
                     # 全ての銘柄を候補とし、AI確率をベースに上値余地があればボーナス点を加算
@@ -1148,8 +1204,10 @@ if app_mode == "💡 おすすめ銘柄推薦":
                     if not is_cry and upside > 0:
                         combined_score += (upside * 50) # Upside 10% = 5 point bonus
                         
+                    hot_icon = "🔥 " if combined_score > 60.0 else ""
+                        
                     results.append({
-                        "銘柄名": item["name"],
+                        "銘柄名": f"{hot_icon}{item['name']}",
                         "ティッカー": tic,
                         "カテゴリ": item["category"].split(" ", 1)[-1] if " " in item["category"] else item["category"],
                         "AI上昇確率": round(prob_up * 100, 1),
@@ -1172,11 +1230,15 @@ if app_mode == "💡 おすすめ銘柄推薦":
                 res_df = pd.DataFrame(results)
                 
                 # スコア順に全体をソートし、上位5銘柄を推薦として抽出
-                # ただし、上昇予測が弱すぎる(50%未満)ものは除外
-                res_df = res_df[res_df["AI上昇確率"] >= 50.0]
+                # (相場が悪く確率が低めでも、その中で相対的に期待値が高い上位を表示する)
                 res_df = res_df.sort_values(by="推移スコア", ascending=False).head(5).reset_index(drop=True)
                 
                 if not res_df.empty:
+                    # 1位のAI確率が50%未満の場合は注記を追加
+                    best_prob = res_df.iloc[0]["AI上昇確率"]
+                    if best_prob < 50.0:
+                        st.info("💡 **AI分析ノート**: 現在の相場環境では全体的に上昇予測確率が低め（50%未満）ですが、その中で比較的強いスコアを持つ上位銘柄を抽出しました。")
+                        
                     res_df = res_df.drop(columns=["推移スコア"]) # 内部スコア列は隠す
                     
                     st.success("🎉 全対象銘柄から、スコア上位のおすすめ銘柄を抽出しました！")
@@ -1185,9 +1247,9 @@ if app_mode == "💡 おすすめ銘柄推薦":
                     csv_results = res_df.to_csv(index=False).encode('utf-8-sig')
                     st.download_button("📥 推薦リストをCSV形式で保存", data=csv_results, file_name="ai_recommended_stocks.csv", mime="text/csv")
                 else:
-                    st.warning("上昇予測が50%を超える銘柄が見つかりませんでした。相場全体が下落トレンドの可能性があります。")
+                    st.warning("推奨可能な銘柄が見つかりませんでした。")
             else:
-                st.warning("解析に成功した銘柄がありませんでした。")
+                st.warning("解析に成功した銘柄がありませんでした。開始日を調整するかブックマークを確認してください。")
         st.stop()
 
 if run_button:
