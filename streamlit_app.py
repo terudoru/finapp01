@@ -82,6 +82,37 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 10px 15px -3px rgba(56, 189, 248, 0.4);
     }
+
+    /* === モバイル対応 (Mobile Responsive CSS) === */
+    @media (max-width: 768px) {
+        .block-container {
+            padding-top: 1.5rem !important;
+            padding-bottom: 2rem !important;
+            padding-left: 0.8rem !important;
+            padding-right: 0.8rem !important;
+        }
+        h1 {
+            font-size: 1.5rem !important;
+        }
+        h2 {
+            font-size: 1.3rem !important;
+        }
+        h3 {
+            font-size: 1.1rem !important;
+        }
+        .stMetric {
+            padding: 10px !important;
+        }
+        /* Ensure data structures are fully scrollable */
+        [data-testid="stDataFrame"], [data-testid="stTable"] {
+            overflow-x: auto !important;
+        }
+        /* Larger tap areas for buttons on mobile */
+        .stButton > button {
+            width: 100% !important;
+            min-height: 3rem !important;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
