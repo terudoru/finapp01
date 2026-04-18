@@ -1,0 +1,11 @@
+services:
+  finapp:
+    build: .
+    container_name: finapp_dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

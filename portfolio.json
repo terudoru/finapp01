@@ -1,0 +1,12 @@
+[
+    {
+        "id": "1_IBM_2026-04-02",
+        "ticker": "IBM",
+        "is_crypto": false,
+        "purchase_date": "2026-04-02",
+        "purchase_time": "00:37:00",
+        "purchase_price": 245.235001,
+        "quantity": 0.1273786658,
+        "notes": ""
+    }
+]
