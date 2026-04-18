@@ -1,4 +1,7 @@
 import streamlit as st
+
+import quantstats as qs
+import pandas_datareader as pdr
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -1066,328 +1069,432 @@ if run_button:
         model = train_and_cache_model(ticker, timeframe, start_date, end_date, auto_tune, X_train, y_train)
         
         status.update(label="✨ 分析が完了しました！", state="complete", expanded=False)
-            
-            # テストデータでの評価
-            predictions = model.predict(X_test)
-            accuracy = accuracy_score(y_test, predictions)
-            
-            # --- テスト期間のAIのシグナルを抽出 ---
-            test_indices = y_test.index
-            ml_df.loc[test_indices, 'AI_Signal'] = predictions
+        # テストデータでの評価
+        predictions = model.predict(X_test)
+        accuracy = accuracy_score(y_test, predictions)
+        
+        # --- テスト期間のAIのシグナルを抽出 ---
+        test_indices = y_test.index
+        ml_df.loc[test_indices, 'AI_Signal'] = predictions
 
-            if app_mode == "📊 個別銘柄の詳細分析":
-                st.header(f"🤖 AI予測 ＆ リスク管理（利確・損切）の目安")
+    if app_mode == "📊 個別銘柄の詳細分析":
+        st.header(f"📊 {ticker} のプロフェッショナル分析")
+        
+        # --- NEW: UI organization by Tabs ---
+        tab1, tab2, tab3, tab4 = st.tabs(["📈 チャート&シグナル", "🏛️ ファンダメンタルズ", "📊 リスク・シミュレーション", "🤖 AI予測(XGBoost)"])
+        
+        with tab1:
+            st.subheader("📉 テクニカルチャート & 売買シグナル")
+            st.markdown("ローソク足に加え、RSIやMACD、**自動検知されたチャートパターン**、さらに**マクロ指標(米10年債利回り)**をオーバーレイ表示します。")
+            
+            col_chart_opts1, col_chart_opts2, col_chart_opts3 = st.columns(3)
+            with col_chart_opts1:
+                show_rsi = st.checkbox("RSI (買われすぎ/売られすぎ) ", value=True)
+            with col_chart_opts2:
+                show_macd = st.checkbox("MACD (トレンド転換) ", value=True)
+            with col_chart_opts3:
+                show_macro = st.checkbox("マクロ指標 (米10年国債利回り)", value=False, help="米国債利回りと株価の逆相関などの関係を確認できます。")
+            
+            rows = 1
+            row_heights = [0.6]
+            if show_rsi:
+                rows += 1
+                row_heights.append(0.2)
+            if show_macd:
+                rows += 1
+                row_heights.append(0.2)
+            
+            total = sum(row_heights)
+            row_heights = [r/total for r in row_heights]
+            
+            # Create subplots for extra indicators. If macro overlay is true, create secondary_y for row 1.
+            fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
+                                vertical_spacing=0.03, row_heights=row_heights,
+                                specs=[[{"secondary_y": True}]] + [[{}]] * (rows-1))
+
+            # ローソク足
+            fig.add_trace(go.Candlestick(x=df.index,
+                            open=df['Open'], high=df['High'],
+                            low=df['Low'], close=df['Close'],
+                            name='Candlestick',
+                            increasing_line_color='green', decreasing_line_color='red'), row=1, col=1, secondary_y=False)
+
+            if use_sma:
+                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_20'], line={'color':'orange', 'width':1.5}, name='SMA 20'), row=1, col=1, secondary_y=False)
+                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'], line={'color':'purple', 'width':1.5}, name='SMA 50'), row=1, col=1, secondary_y=False)
                 
-                # --- 🏢 企業基本情報 ＆ 主要財務指標 (New Feature) ---
-                with st.expander("🏢 企業基本情報 ＆ 主要財務指標", expanded=True):
+                # --- Feature: Automated Chart Patterns (Golden/Dead Cross) ---
+                # SMA20 crossing above SMA50 (Golden)
+                gc_points = df[(df['SMA_20'] > df['SMA_50']) & (df['SMA_20'].shift(1) <= df['SMA_50'].shift(1))]
+                dc_points = df[(df['SMA_20'] < df['SMA_50']) & (df['SMA_20'].shift(1) >= df['SMA_50'].shift(1))]
+                if not gc_points.empty:
+                    fig.add_trace(go.Scatter(x=gc_points.index, y=gc_points['SMA_20'] * 0.98, mode='markers', 
+                                  marker=dict(symbol='star', size=12, color='gold', line=dict(width=1, color='orange')), name='🌟 G-Cross'), row=1, col=1, secondary_y=False)
+                if not dc_points.empty:
+                    fig.add_trace(go.Scatter(x=dc_points.index, y=dc_points['SMA_20'] * 1.02, mode='markers', 
+                                  marker=dict(symbol='x', size=10, color='black', line=dict(width=1, color='red')), name='⚔️ D-Cross'), row=1, col=1, secondary_y=False)
+
+            if use_bb:
+                fig.add_trace(go.Scatter(x=df.index, y=df['Close'] * (1 + df['BB_Width']/2), line={'color':'lightblue', 'width':1, 'dash':'dash'}, name='BB Upper', showlegend=False), row=1, col=1, secondary_y=False)
+                fig.add_trace(go.Scatter(x=df.index, y=df['Close'] * (1 - df['BB_Width']/2), line={'color':'lightblue', 'width':1, 'dash':'dash'}, name='BB Lower', fill='tonexty', fillcolor='rgba(173,216,230,0.1)', showlegend=False), row=1, col=1, secondary_y=False)
+
+            curr_row = 2
+            if show_rsi:
+                fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line={'color':'#38bdf8', 'width':1.5}, name='RSI'), row=curr_row, col=1)
+                fig.add_hline(y=70, line_dash="dash", line_color="red", row=curr_row, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", row=curr_row, col=1)
+                
+                # --- Feature: Chart Patterns (RSI Oversold/Overbought markers) ---
+                os_points = df[(df['RSI'] < 30) & (df['RSI'].shift(1) >= 30)]
+                ob_points = df[(df['RSI'] > 70) & (df['RSI'].shift(1) <= 70)]
+                if not os_points.empty:
+                    fig.add_trace(go.Scatter(x=os_points.index, y=os_points['RSI'], mode='markers', marker=dict(symbol='triangle-up', size=8, color='green'), name='RSI Oversold'), row=curr_row, col=1)
+                if not ob_points.empty:
+                    fig.add_trace(go.Scatter(x=ob_points.index, y=ob_points['RSI'], mode='markers', marker=dict(symbol='triangle-down', size=8, color='red'), name='RSI Overbought'), row=curr_row, col=1)
+
+                fig.update_yaxes(title_text="RSI", row=curr_row, col=1)
+                curr_row += 1
+                
+            if show_macd:
+                fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line={'color':'blue', 'width':1.5}, name='MACD'), row=curr_row, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], line={'color':'orange', 'width':1.5}, name='Signal'), row=curr_row, col=1)
+                macd_hist = df['MACD'] - df['MACD_Signal']
+                fig.add_trace(go.Bar(x=df.index, y=macd_hist, name='Histogram', marker_color=np.where(macd_hist<0, 'red', 'green')), row=curr_row, col=1)
+                fig.update_yaxes(title_text="MACD", row=curr_row, col=1)
+
+            # --- Feature: Macro Overlay ---
+            if show_macro:
+                with st.spinner("FREDからマクロ指標を取得中..."):
                     try:
-                        ticker_info_obj = yf.Ticker(ticker)
-                        info = ticker_info_obj.info
-                        
-                        f_col1, f_col2, f_col3 = st.columns(3)
-                        with f_col1:
-                            st.write("**基本データ**")
-                            st.write(f"- セクター: {info.get('sectorDisp', info.get('sector', 'N/A'))}")
-                            st.write(f"- 業界: {info.get('industryDisp', info.get('industry', 'N/A'))}")
-                            m_cap = info.get('marketCap')
-                            if m_cap:
-                                st.write(f"- 時価総額: ${m_cap:,.0f}" if not is_crypto else f"- 時価総額: ${m_cap:,.0f}")
-                            else:
-                                st.write("- 時価総額: N/A")
-                                
-                        with f_col2:
-                            st.write("**投資指標**")
-                            pe = info.get('trailingPE')
-                            st.write(f"- PER (実績): {f'{pe:.2f}' if pe else 'N/A'}")
-                            pb = info.get('priceToBook')
-                            st.write(f"- PBR: {f'{pb:.2f}' if pb else 'N/A'}")
-                            div = info.get('dividendYield')
-                            st.write(f"- 配当利回り: {f'{div*100:.2f}%' if div else 'N/A'}")
-                            
-                        with f_col3:
-                            st.write("**財務健全性**")
-                            roe = info.get('returnOnEquity')
-                            st.write(f"- ROE: {f'{roe*100:.2f}%' if roe else 'N/A'}")
-                            de = info.get('debtToEquity')
-                            st.write(f"- 自己資本比率(D/E): {f'{de:.2f}' if de else 'N/A'}")
-                            beta = info.get('beta')
-                            st.write(f"- ベータ値 (感応度): {f'{beta:.2f}' if beta else 'N/A'}")
+                        import pandas_datareader as pdr
+                        # DGS10 = 10-Year Treasury Constant Maturity Rate
+                        macro_series = pdr.DataReader('DGS10', 'fred', df.index[0], df.index[-1])
+                        # Reindex to match trading days, forward fill
+                        macro_series = macro_series.reindex(df.index).ffill()
+                        fig.add_trace(go.Scatter(x=macro_series.index, y=macro_series['DGS10'], line={'color':'purple', 'width':1, 'dash':'dot'}, name='US 10Yr Yield (R)'), row=1, col=1, secondary_y=True)
+                        fig.update_yaxes(title_text="US 10Yr Yield (%)", secondary_y=True, row=1, col=1)
                     except Exception as e:
-                        st.write("銘柄情報の取得に失敗しました。詳細データがない可能性があります。")
+                        st.error(f"マクロデータの取得に失敗しました: {e}")
 
+            fig.update_layout(title=f'{ticker} テクニカルチャート',
+                              height=800 if rows > 1 else 500,
+                              template="plotly_white",
+                              xaxis_rangeslider_visible=False,
+                              showlegend=True,
+                              legend={'yanchor':"top", 'y':0.99, 'xanchor':"left", 'x':0.01})
+            st.plotly_chart(fig, use_container_width=True)
+
+
+        with tab2:
+            st.header("🏢 ファンダメンタルズ ＆ 企業情報")
+            
+            try:
+                ticker_info_obj = yf.Ticker(ticker)
+                info = ticker_info_obj.info
                 
-                # --- 💡 インサイト ---
-                insight_col1, insight_col2 = st.columns(2)
-                with insight_col1:
-                    st.subheader("📅 企業イベント (予定)")
-                    events = get_corporate_events(ticker)
-                    if events:
-                        st.write(pd.DataFrame([{"項目": k, "値": str(v)} for k, v in events.items()]))
+                f_col1, f_col2, f_col3 = st.columns(3)
+                with f_col1:
+                    st.write("**基本データ**")
+                    st.write(f"- セクター: {info.get('sectorDisp', info.get('sector', 'N/A'))}")
+                    st.write(f"- 業界: {info.get('industryDisp', info.get('industry', 'N/A'))}")
+                    m_cap = info.get('marketCap')
+                    if m_cap:
+                        st.write(f"- 時価総額: ${m_cap:,.0f}" if not is_crypto else f"- 時価総額: ${m_cap:,.0f}")
                     else:
-                        st.write("イベント情報がありません（仮想通貨/ETF等）。")
-                
-                with insight_col2:
-                    st.subheader("🔗 ウォッチリスト相関係数 (90日)")
-                    all_watchlist = list(WATCHLIST[selected_category].values())
-                    if len(all_watchlist) > 1:
-                        corr_df = calculate_correlations(all_watchlist)
-                        if corr_df is not None:
-                            fig_corr = go.Figure(data=go.Heatmap(
-                                z=corr_df.values, x=corr_df.columns, y=corr_df.columns,
-                                colorscale='Viridis', zmin=-1, zmax=1
-                            ))
-                            fig_corr.update_layout(height=400, margin=dict(l=20, r=20, t=20, b=20))
-                            st.plotly_chart(fig_corr, use_container_width=True)
-                        else: st.write("相関データの取得に失敗しました。")
-                    else: st.write("相関を計算するには複数の銘柄が必要です。")
-                
-                # 本日のデータで次の期間の予測を行う
-                latest_features = df.iloc[-1:][features]
-                if latest_features.isna().any().any():
-                    latest_features = ml_df.iloc[-1:][features]
-                    
-                tomorrow_prob = model.predict_proba(latest_features)[0]
-                prob_down, prob_up = tomorrow_prob[0], tomorrow_prob[1]
-                
-                # --- 🧠 AIの判断根拠 (SHAP分析) ---
-                with st.expander("🧠 AIはどうしてそう判断したの？ (説明可能性分析)", expanded=False):
-                    st.write("SHAPと呼ばれる技術を使い、AIがどの指標を重視して予測を行ったかを可視化します。")
-                    try:
-                        explainer = shap.Explainer(model)
-                        shap_values = explainer(latest_features)
+                        st.write("- 時価総額: N/A")
                         
-                        fig_shap, ax_shap = plt.subplots(figsize=(10, 5))
-                        shap.bar_plot(shap_values[0], feature_names=features, show=False)
-                        st.pyplot(fig_shap)
-                        st.caption("※ 右に伸びている指標は価格を押し上げる要因、左に伸びている指標は押し下げる要因として働いています。")
-                    except Exception as e:
-                        st.warning(f"SHAP分析の生成に失敗しました: {e}")
-
-                # --- 📉 マクロ指標感応度分析 (NEW) ---
-                with st.expander("📉 マクロ指標感応度分析 (市場・原油・金・VIXとの連動性)", expanded=False):
-                    st.write("対象銘柄が主要な外部要因にどの程度影響を受けやすいかを、過去180日のデータから分析します。")
-                    with st.spinner("マクロ感応度を計算中..."):
-                        macro_res = calculate_macro_sensitivity(ticker)
-                        if macro_res:
-                            m_df = pd.DataFrame(list(macro_res.items()), columns=['指標', '相関係数'])
-                            fig_macro = px.bar(m_df, x='相関係数', y='指標', orientation='h',
-                                              color='相関係数', color_continuous_scale='RdBu_r', range_color=[-1, 1],
-                                              title=f"{ticker} のマクロ要因・相関プロファイル")
-                            fig_macro.update_layout(height=350, margin=dict(l=20, r=20, t=50, b=20))
-                            st.plotly_chart(fig_macro, use_container_width=True)
-                            st.caption("※ 1に近いほど正の連動、-1に近いほど逆の動きをします。0付近は無相関です。")
+                with f_col2:
+                    st.write("**投資指標**")
+                    pe = info.get('trailingPE')
+                    st.write(f"- PER (実績): {f'{pe:.2f}' if pe else 'N/A'}")
+                    pb = info.get('priceToBook')
+                    st.write(f"- PBR: {f'{pb:.2f}' if pb else 'N/A'}")
+                    div = info.get('dividendYield')
+                    st.write(f"- 配当利回り: {f'{div*100:.2f}%' if div else 'N/A'}")
+                    
+                with f_col3:
+                    st.write("**財務健全性**")
+                    roe = info.get('returnOnEquity')
+                    st.write(f"- ROE: {f'{roe*100:.2f}%' if roe else 'N/A'}")
+                    de = info.get('debtToEquity')
+                    st.write(f"- 自己資本比率(D/E): {f'{de:.2f}' if de else 'N/A'}")
+                    beta = info.get('beta')
+                    st.write(f"- ベータ値 (感応度): {f'{beta:.2f}' if beta else 'N/A'}")
+                    
+                st.markdown("---")
+                # --- Feature: Historical Fundamentals Chart ---
+                st.subheader("📊 業績推移 (売上高・純利益)")
+                if not is_crypto:
+                    with st.spinner("業績データを取得中..."):
+                        inc_stmt = ticker_info_obj.income_stmt
+                        if inc_stmt is not None and not inc_stmt.empty:
+                            try:
+                                # YFinance return columns as dates
+                                # Get Revenue and Net Income
+                                rev = inc_stmt.loc['Total Revenue'] if 'Total Revenue' in inc_stmt.index else None
+                                net = inc_stmt.loc['Net Income'] if 'Net Income' in inc_stmt.index else None
+                                
+                                if rev is not None and net is not None:
+                                    # Create DataFrame
+                                    funds_df = pd.DataFrame({'Total Revenue': rev, 'Net Income': net}).sort_index()
+                                    # Format index just to Year
+                                    funds_df.index = [str(d.date()) for d in funds_df.index]
+                                    
+                                    fig_funds = go.Figure()
+                                    fig_funds.add_trace(go.Bar(x=funds_df.index, y=funds_df['Total Revenue'], name='Total Revenue', marker_color='lightblue'))
+                                    fig_funds.add_trace(go.Bar(x=funds_df.index, y=funds_df['Net Income'], name='Net Income', marker_color='darkblue'))
+                                    fig_funds.update_layout(barmode='group', title=f"{ticker} 業績推移 (直近数年)", yaxis_title="Amount ($)", height=400)
+                                    st.plotly_chart(fig_funds, use_container_width=True)
+                                else:
+                                    st.info("データが一部欠落しています。")
+                            except Exception as e:
+                                st.warning("業績グラフの生成に失敗しました。")
                         else:
-                            st.info("マクロデータの取得または計算に失敗しました。")
+                            st.info("過去の財務データが見つかりませんでした。")
+                else:
+                    st.info("仮想通貨のため財務データはありません。")
+                    
+            except Exception as e:
+                st.write("銘柄情報の取得に失敗しました。詳細データがない可能性があります。")
+                
+            # 💡 インサイト
+            st.markdown("---")
+            insight_col1, insight_col2 = st.columns(2)
+            with insight_col1:
+                st.subheader("📅 企業イベント (予定)")
+                events = get_corporate_events(ticker)
+                if events:
+                    st.write(pd.DataFrame([{"項目": k, "値": str(v)} for k, v in events.items()]))
+                else:
+                    st.write("イベント情報がありません（仮想通貨/ETF等）。")
+            
+            with insight_col2:
+                st.subheader("🔗 ウォッチリスト相関係数 (90日)")
+                all_watchlist = list(WATCHLIST[selected_category].values())
+                if len(all_watchlist) > 1:
+                    corr_df = calculate_correlations(all_watchlist)
+                    if corr_df is not None:
+                        fig_corr = go.Figure(data=go.Heatmap(
+                            z=corr_df.values, x=corr_df.columns, y=corr_df.columns,
+                            colorscale='Viridis', zmin=-1, zmax=1
+                        ))
+                        fig_corr.update_layout(height=400, margin=dict(l=20, r=20, t=20, b=20))
+                        st.plotly_chart(fig_corr, use_container_width=True)
+                    else: st.write("相関データの取得に失敗しました。")
+                else: st.write("相関を計算するには複数の銘柄が必要です。")
 
-                # --- ニュース・感情分析 (Opt-out可能) ---
-                news_adjustment = 0.0
-                sentiment_summary = []
-                if use_news:
-                    st.markdown("---")
-                    st.header("📰 最新ニュース・感情分析")
+
+        with tab3:
+            st.header("📊 プロフェッショナル リスク分析 & シミュレーション")
+            
+            # --- Feature: Quantstats Tear Sheet ---
+            st.subheader("📈 ハイレベル成果分析 (Tear Sheet)")
+            st.write("過去の価格変動から、プロレベルのリスク・リターン指標（シャープレシオや最大下落幅など）を算出します。")
+            
+            try:
+                import quantstats as qs
+                # Calculate daily returns
+                daily_returns = df['Close'].pct_change().dropna()
+                daily_returns.index = pd.to_datetime(daily_returns.index)
+                
+                # Use quantstats to calculate core metrics
+                qs_col1, qs_col2, qs_col3, qs_col4 = st.columns(4)
+                sharpe = qs.stats.sharpe(daily_returns)
+                sortino = qs.stats.sortino(daily_returns)
+                max_dd = qs.stats.max_drawdown(daily_returns)
+                win_rate = qs.stats.win_rate(daily_returns)
+                
+                qs_col1.metric("Sharpe Ratio", f"{sharpe:.2f}", help="リスク調整後のリターン。1.0以上なら優秀です。")
+                qs_col2.metric("Sortino Ratio", f"{sortino:.2f}", help="下落リスクに対するリターン（シャープレシオの改良版）。")
+                qs_col3.metric("Max Drawdown", f"{max_dd*100:.2f}%", help="過去最大のピークからの下落幅。")
+                qs_col4.metric("Win Rate", f"{win_rate*100:.1f}%", help="日次リターンがプラスになった確率。")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Quantstatsの計算に失敗しました: {e}")
+            
+            # --- Feature: Monte Carlo Simulation ---
+            st.markdown("---")
+            st.subheader("🎲 モンテカルロ・シミュレーション (1年後の株価予測)")
+            st.write("過去のボラティリティと平均リターンを元に、1,000パターンのランダムな将来推移を計算します。")
+            
+            with st.spinner("1,000パターンの確率シミュレーションを実行中..."):
+                days_to_simulate = 252 # 1 Trading Year
+                simulations = 1000
+                mu = daily_returns.mean()
+                sigma = daily_returns.std()
+                
+                last_price = df['Close'].iloc[-1]
+                simulation_df = np.zeros((days_to_simulate, simulations))
+                simulation_df[0] = last_price
+                
+                # Generate random paths
+                for x in range(1, days_to_simulate):
+                    shock = np.random.normal(loc=mu, scale=sigma, size=simulations)
+                    simulation_df[x] = simulation_df[x - 1] * (1 + shock)
+                    
+                # Plot visually appealing summary (Avoid plotting 1000 lines, plot percentiles)
+                sim_percentiles = np.percentile(simulation_df, [5, 50, 95], axis=1)
+                
+                fig_mc = go.Figure()
+                future_dates = [df.index[-1] + datetime.timedelta(days=i) for i in range(days_to_simulate)]
+                
+                # 95th Percentile
+                fig_mc.add_trace(go.Scatter(x=future_dates, y=sim_percentiles[2], line=dict(color='green', dash='dot'), name='Top 5% (Best Case)'))
+                # Median
+                fig_mc.add_trace(go.Scatter(x=future_dates, y=sim_percentiles[1], line=dict(color='blue', width=2), name='Median (予想中央値)'))
+                # 5th Percentile
+                fig_mc.add_trace(go.Scatter(x=future_dates, y=sim_percentiles[0], line=dict(color='red', dash='dot'), name='Bottom 5% (Worst Case)'))
+                
+                fig_mc.update_layout(title="Monte Carlo Price Projection - Next 1 Year", yaxis_title="Price ($)", height=500, template='plotly_white')
+                st.plotly_chart(fig_mc, use_container_width=True)
+                
+                mc_col1, mc_col2, mc_col3 = st.columns(3)
+                mc_col1.metric("ワーストケース (下位5%)", f"${sim_percentiles[0][-1]:.2f}")
+                mc_col2.metric("予想中央値 (Median)", f"${sim_percentiles[1][-1]:.2f}")
+                mc_col3.metric("ベストケース (上位5%)", f"${sim_percentiles[2][-1]:.2f}")
+
+
+        with tab4:
+            st.header(f"🤖 AI予測 ＆ リスク管理（利確・損切）の目安")
+            
+            tomorrow_pred = 1 if prob_up > 0.5 else 0
+            
+            pred_col1, pred_col2 = st.columns(2)
+            
+            with pred_col1:
+                st.subheader(f"次の期間({timeframe})のXGBoost予測")
+                if tomorrow_pred == 1:
+                    st.success(f"🔼 **上昇する確率が高い**（確率: {prob_up*100:.1f} %）\n\n**現在価格**: ${latest_closing_price:,.4f}")
+                else:
+                    st.error(f"🔽 **下落する確率が高い**（確率: {prob_down*100:.1f} %）\n\nリスクが高いため購入を見送るか、空売りを検討してください。")
+                    
+            with pred_col2:
+                st.subheader("💡 買う場合のリスク管理（損切りと利確）")
+                if pd.isna(latest_atr):
+                    st.write("ボラティリティデータが不足しています。")
+                else:
+                    stop_loss_price = latest_closing_price - (1.5 * latest_atr)
+                    take_profit_price = latest_closing_price + (2.5 * latest_atr)
+                    
+                    st.markdown(f"""
+                    現在のボラティリティ（1日の値動き: 約${latest_atr:.2f}）を考慮した、安全な取引の目安です：
+                    
+                    - 🎯 **利確目標 (Take Profit)**: **`${take_profit_price:.2f}`**
+                    - 🛡️ **損切りライン (Stop Loss)**: **`${stop_loss_price:.2f}`** （必ず損切りして逃げる）
+                    """)
+
+            # --- 🧠 AIの判断根拠 (SHAP分析) ---
+            st.markdown("---")
+            st.subheader("🧠 AI予測の根拠 (SHAP分析)")
+            st.write("SHAPと呼ばれる技術を使い、AIがどの指標を重視して予測を行ったかを可視化します。")
+            try:
+                explainer = shap.Explainer(model)
+                shap_values = explainer(latest_features)
+                
+                fig_shap, ax_shap = plt.subplots(figsize=(10, 5))
+                shap.bar_plot(shap_values[0], feature_names=features, show=False)
+                st.pyplot(fig_shap)
+                st.caption("※ 右に伸びている指標は価格を押し上げる要因、左に伸びている指標は押し下げる要因として働いています。")
+            except Exception as e:
+                st.warning(f"SHAP分析の生成に失敗しました: {e}")
+
+            # --- ニュース・感情分析 (Opt-out可能) ---
+            if use_news:
+                st.markdown("---")
+                st.header("📰 最新ニュース・感情分析")
+                with st.spinner("AIによるニュース要約と感情スコアを計算中..."):
                     try:
                         ticker_obj = yf.Ticker(ticker)
                         news_data = ticker_obj.news
-                        if news_data and len(news_data) > 0:
-                            # FinBERTを使用した分析
-                            use_finbert = (get_setting("use_finbert", "1") == "1")
-                            titles = [a.get('title', '') for a in news_data[:5] if a.get('title', '')]
+                        
+                        if news_data:
+                            titles = [item.get('title', '') for item in news_data[:5]]
                             adv_score, adv_mood = analyze_sentiment(titles, use_finbert=use_finbert)
                             
-                            st.metric("AI判定によるセンチメント", f"{adv_mood}", delta=f"{adv_score:+.2f}")
+                            st.metric("市場感情(AI)", adv_mood, f"スコア: {adv_score:+.2f}")
                             
-                            with st.expander("詳細なニュース内容"):
-                                for article in news_data[:5]:
-                                    title = article.get('title', '')
-                                    if title:
-                                        st.write(f"- {title}")
-                            
-                            # スコアに応じて確率を調整 (例: 最大+-10%の補正)
-                            news_adjustment = adv_score * 0.10
-                            prob_up = max(0.0, min(1.0, prob_up + news_adjustment))
-                            prob_down = 1.0 - prob_up
-                            
-                            if news_adjustment > 0:
-                                st.info(f"💡 ニュースがポジティブなため、AIの「上昇確率」を +{news_adjustment*100:.1f} % 上方修正しました。")
-                            elif news_adjustment < 0:
-                                st.warning(f"⚠️ ニュースがネガティブなため、AIの「上昇確率」を {news_adjustment*100:.1f} % 下方修正しました。")
+                            for item in news_data[:3]:
+                                title = item.get('title', '')
+                                link = item.get('link', '#')
+                                st.markdown(f"- **[{title}]({link})**")
                         else:
-                            st.write("最新のニュースが見つかりませんでした。")
+                            st.write("最近のニュースは見つかりませんでした。")
                     except Exception as e:
                         st.error(f"ニュース取得中にエラーが発生しました: {e}")
-                
-                st.markdown("---")
-                tomorrow_pred = 1 if prob_up > 0.5 else 0
-                
-                pred_col1, pred_col2 = st.columns(2)
-                
-                with pred_col1:
-                    st.subheader(f"次の期間({timeframe})の予測")
-                    if tomorrow_pred == 1:
-                        st.success(f"🔼 **上昇する確率が高い**（確率: {prob_up*100:.1f} %）\n\n**現在価格**: ${latest_closing_price:,.4f}")
-                    else:
-                        st.error(f"🔽 **下落する確率が高い**（確率: {prob_down*100:.1f} %）\n\nリスクが高いため購入を見送るか、空売りを検討してください。")
                         
-                with pred_col2:
-                    st.subheader("💡 買う場合のリスク管理（損切りと利確）")
-                    if pd.isna(latest_atr):
-                        st.write("ボラティリティデータが不足しています。")
-                    else:
-                        stop_loss_price = latest_closing_price - (1.5 * latest_atr)
-                        take_profit_price = latest_closing_price + (2.5 * latest_atr)
-                        
-                        st.markdown(f"""
-                        現在のボラティリティ（1日の値動き: 約${latest_atr:.2f}）を考慮した、安全な取引の目安です：
-                        
-                        - 🎯 **利確目標 (Take Profit)**: **`${take_profit_price:.2f}`** （購入価格よりかなり上がったら欲張らず一部売却）
-                        - 🛡️ **損切りライン (Stop Loss)**: **`${stop_loss_price:.2f}`** （予想に反してこの価格まで下がったら、**必ず損切りして逃げる**）
-                        """)
+        if st.button("📢 今日の予測結果をSNS/チャットに通知飛ばす", type="secondary"):
+            msg = f"📈 【AI予測通知】 {ticker}\n判定: {'上昇(1)' if tomorrow_pred == 1 else '下落(0)'}\n確率: {prob_up*100:.1f}%\n現在値: ${latest_closing_price:,.2f}\n精度: {accuracy*100:.1f}%"
+            send_notification(msg)
+            st.toast("通知を送信しました！")
 
-                # --- Plotlyによるローソク足 ＋ 過去のシグナル表示 ---
-                st.markdown("---")
-                st.header("📉 テクニカルチャート & 売買シグナル")
-                st.markdown("ローソク足に加え、RSIやMACDなどの指標をマルチペインで確認できます。")
-                
-                col_chart_opts1, col_chart_opts2 = st.columns(2)
-                with col_chart_opts1:
-                    show_rsi = st.checkbox("RSI (買われすぎ/売られすぎ) を表示", value=True)
-                with col_chart_opts2:
-                    show_macd = st.checkbox("MACD (トレンド転換) を表示", value=True)
-                
-                rows = 1
-                row_heights = [0.6]
-                if show_rsi:
-                    rows += 1
-                    row_heights.append(0.2)
-                if show_macd:
-                    rows += 1
-                    row_heights.append(0.2)
-                
-                total = sum(row_heights)
-                row_heights = [r/total for r in row_heights]
-                
-                fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
-                                    vertical_spacing=0.03, row_heights=row_heights)
 
-                # ローソク足
-                fig.add_trace(go.Candlestick(x=df.index,
-                                open=df['Open'], high=df['High'],
-                                low=df['Low'], close=df['Close'],
-                                name='Candlestick',
-                                increasing_line_color='green', decreasing_line_color='red'), row=1, col=1)
+    elif app_mode == "🧪 バックテスト・検証機能":
+        # --- バーチャル・ポートフォリオ（バックテスト） ---
+        st.markdown("---")
+        st.header(f"💰 【{ticker}】バックテスト（仮想の資産推移シミュレーション）")
+        st.markdown(f"過去のテスト期間（{y_test.index[0].date()} 〜 {y_test.index[-1].date()}）におけるAIシグナルとパフォーマンスを検証します。")
+        
+        initial_capital = st.number_input("初期投資額 (USD)", value=10000)
+        enable_short = st.checkbox("🔄 「空売り（ショート）」戦略をシミュレーションに含める", value=False, help="AIが下落すると予測した日（AIシグナル=0）に空売りを仕掛け、相場の下落も利益に変えるヘッジ戦略を検証します。")
+        
+        test_df = ml_df.loc[test_indices].copy()
+        
+        # 翌日のリターン (Next Close / Close - 1)
+        test_df['Tomorrow_Return'] = test_df['Close'].shift(-1) / test_df['Close'] - 1
+        # 最後の行は翌日がないため0埋め
+        test_df['Tomorrow_Return'] = test_df['Tomorrow_Return'].fillna(0)
+        
+        # 保有戦略（Buy & Hold）の単利/複利
+        test_df['Buy_Hold_Eq'] = (1.0 + test_df['Tomorrow_Return']).cumprod() * initial_capital
+        
+        # AI戦略
+        if enable_short:
+            test_df['Strategy_Return'] = np.where(test_df['AI_Signal'] == 1, test_df['Tomorrow_Return'], -test_df['Tomorrow_Return'])
+        else:
+            test_df['Strategy_Return'] = np.where(test_df['AI_Signal'] == 1, test_df['Tomorrow_Return'], 0)
+            
+        test_df['Strategy_Eq'] = (1.0 + test_df['Strategy_Return']).cumprod() * initial_capital
+        
+        # グラフ描画
+        eq_fig = go.Figure()
+        eq_fig.add_trace(go.Scatter(x=test_df.index, y=test_df['Buy_Hold_Eq'], mode='lines', name='何もしない（一括投資・Buy&Hold）', line={'color':'gray', 'dash':'dot'}))
+        
+        strat_name = 'AIシグナル戦略 (ロング＆ショート両建て)' if enable_short else 'AIシグナル戦略 (上がる日だけ保有)'
+        eq_fig.add_trace(go.Scatter(x=test_df.index, y=test_df['Strategy_Eq'], mode='lines', name=strat_name, line={'color':'#38bdf8', 'width':2.5}))
+        
+        final_buy_hold = test_df['Buy_Hold_Eq'].iloc[-1]
+        final_ai = test_df['Strategy_Eq'].iloc[-1]
+        
+        eq_fig.update_layout(title='資産の推移 (Equity Curve)', yaxis_title='Account Balance', height=500, template="plotly_white")
+        st.plotly_chart(eq_fig, use_container_width=True)
+        
+        # 統計指標の計算
+        strat_returns = test_df['Strategy_Return']
+        if not strat_returns.empty:
+            sharpe = (strat_returns.mean() / strat_returns.std()) * np.sqrt(252) if strat_returns.std() != 0 else 0
+            rolling_max = test_df['Strategy_Eq'].cummax()
+            drawdown = (test_df['Strategy_Eq'] - rolling_max) / rolling_max
+            max_dd = drawdown.min()
+            # ゼロリターンを除外して勝率を出す
+            active_returns = strat_returns[strat_returns != 0]
+            win_rate = (active_returns > 0).mean() * 100 if len(active_returns) > 0 else 0
+        else:
+            sharpe, max_dd, win_rate = 0, 0, 0
 
-                if use_sma:
-                    fig.add_trace(go.Scatter(x=df.index, y=df['SMA_20'], line={'color':'orange', 'width':1.5}, name='SMA 20'), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'], line={'color':'purple', 'width':1.5}, name='SMA 50'), row=1, col=1)
-
-                if use_bb:
-                    fig.add_trace(go.Scatter(x=df.index, y=df['Close'] * (1 + df['BB_Width']/2), line={'color':'lightblue', 'width':1, 'dash':'dash'}, name='BB Upper', showlegend=False), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=df['Close'] * (1 - df['BB_Width']/2), line={'color':'lightblue', 'width':1, 'dash':'dash'}, name='BB Lower', fill='tonexty', fillcolor='rgba(173,216,230,0.1)', showlegend=False), row=1, col=1)
-
-                buy_signals = ml_df[ml_df['AI_Signal'] == 1]
-                if not buy_signals.empty:
-                    fig.add_trace(go.Scatter(
-                        x=buy_signals.index,
-                        y=buy_signals['Low'] * 0.98,
-                        mode='markers',
-                        marker={'symbol':'triangle-up', 'size':12, 'color':'blue', 'line':{'width':1, 'color':'darkblue'}},
-                        name='AI 買いシグナル(🔼)'
-                    ), row=1, col=1)
-                    
-                curr_row = 2
-                if show_rsi:
-                    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line={'color':'#38bdf8', 'width':1.5}, name='RSI'), row=curr_row, col=1)
-                    fig.add_hline(y=70, line_dash="dash", line_color="red", row=curr_row, col=1)
-                    fig.add_hline(y=30, line_dash="dash", line_color="green", row=curr_row, col=1)
-                    fig.update_yaxes(title_text="RSI", row=curr_row, col=1)
-                    curr_row += 1
-                    
-                if show_macd:
-                    fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line={'color':'blue', 'width':1.5}, name='MACD'), row=curr_row, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], line={'color':'orange', 'width':1.5}, name='Signal'), row=curr_row, col=1)
-                    macd_hist = df['MACD'] - df['MACD_Signal']
-                    fig.add_trace(go.Bar(x=df.index, y=macd_hist, name='Histogram', marker_color=np.where(macd_hist<0, 'red', 'green')), row=curr_row, col=1)
-                    fig.update_yaxes(title_text="MACD", row=curr_row, col=1)
-
-                fig.update_layout(title=f'{ticker} テクニカルチャート',
-                                  height=800,
-                                  template="plotly_white",
-                                  xaxis_rangeslider_visible=False,
-                                  showlegend=True,
-                                  legend={'yanchor':"top", 'y':0.99, 'xanchor':"left", 'x':0.01})
-                st.plotly_chart(fig, use_container_width=True)
+        st.write(f"📈 **AI戦略の最終資産**: **${final_ai:,.2f}** (単純保有: ${final_buy_hold:,.2f})")
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("🎯 モデル正答率", f"{accuracy * 100:.1f} %")
+        c2.metric("📊 シャープレシオ", f"{sharpe:.2f}")
+        c3.metric("📉 最大ドローダウン", f"{max_dd * 100:.1f} %")
+        c4.metric("🏆 トレード勝率", f"{win_rate:.1f} %")
                 
-                if st.button("📢 今日の予測結果をSNS/チャットに通知飛ばす", type="secondary"):
-                    msg = f"📈 【AI予測通知】 {ticker}\n判定: {'上昇(1)' if tomorrow_pred == 1 else '下落(0)'}\n確率: {prob_up*100:.1f}%\n現在値: ${latest_closing_price:,.2f}\n精度: {accuracy*100:.1f}%"
-                    send_notification(msg)
-                    st.toast("通知を送信しました！")
-
-            elif app_mode == "🧪 バックテスト・検証機能":
-                # --- バーチャル・ポートフォリオ（バックテスト） ---
-                st.markdown("---")
-                st.header(f"💰 【{ticker}】バックテスト（仮想の資産推移シミュレーション）")
-                st.markdown(f"過去のテスト期間（{y_test.index[0].date()} 〜 {y_test.index[-1].date()}）におけるAIシグナルとパフォーマンスを検証します。")
-                
-                initial_capital = st.number_input("初期投資額 (USD)", value=10000)
-                enable_short = st.checkbox("🔄 「空売り（ショート）」戦略をシミュレーションに含める", value=False, help="AIが下落すると予測した日（AIシグナル=0）に空売りを仕掛け、相場の下落も利益に変えるヘッジ戦略を検証します。")
-                
-                test_df = ml_df.loc[test_indices].copy()
-                
-                # 翌日のリターン (Next Close / Close - 1)
-                test_df['Tomorrow_Return'] = test_df['Close'].shift(-1) / test_df['Close'] - 1
-                # 最後の行は翌日がないため0埋め
-                test_df['Tomorrow_Return'] = test_df['Tomorrow_Return'].fillna(0)
-                
-                # 保有戦略（Buy & Hold）の単利/複利
-                test_df['Buy_Hold_Eq'] = (1.0 + test_df['Tomorrow_Return']).cumprod() * initial_capital
-                
-                # AI戦略
-                if enable_short:
-                    test_df['Strategy_Return'] = np.where(test_df['AI_Signal'] == 1, test_df['Tomorrow_Return'], -test_df['Tomorrow_Return'])
-                else:
-                    test_df['Strategy_Return'] = np.where(test_df['AI_Signal'] == 1, test_df['Tomorrow_Return'], 0)
-                    
-                test_df['Strategy_Eq'] = (1.0 + test_df['Strategy_Return']).cumprod() * initial_capital
-                
-                # グラフ描画
-                eq_fig = go.Figure()
-                eq_fig.add_trace(go.Scatter(x=test_df.index, y=test_df['Buy_Hold_Eq'], mode='lines', name='何もしない（一括投資・Buy&Hold）', line={'color':'gray', 'dash':'dot'}))
-                
-                strat_name = 'AIシグナル戦略 (ロング＆ショート両建て)' if enable_short else 'AIシグナル戦略 (上がる日だけ保有)'
-                eq_fig.add_trace(go.Scatter(x=test_df.index, y=test_df['Strategy_Eq'], mode='lines', name=strat_name, line={'color':'#38bdf8', 'width':2.5}))
-                
-                final_buy_hold = test_df['Buy_Hold_Eq'].iloc[-1]
-                final_ai = test_df['Strategy_Eq'].iloc[-1]
-                
-                eq_fig.update_layout(title='資産の推移 (Equity Curve)', yaxis_title='Account Balance', height=500, template="plotly_white")
-                st.plotly_chart(eq_fig, use_container_width=True)
-                
-                # 統計指標の計算
-                strat_returns = test_df['Strategy_Return']
-                if not strat_returns.empty:
-                    sharpe = (strat_returns.mean() / strat_returns.std()) * np.sqrt(252) if strat_returns.std() != 0 else 0
-                    rolling_max = test_df['Strategy_Eq'].cummax()
-                    drawdown = (test_df['Strategy_Eq'] - rolling_max) / rolling_max
-                    max_dd = drawdown.min()
-                    # ゼロリターンを除外して勝率を出す
-                    active_returns = strat_returns[strat_returns != 0]
-                    win_rate = (active_returns > 0).mean() * 100 if len(active_returns) > 0 else 0
-                else:
-                    sharpe, max_dd, win_rate = 0, 0, 0
-
-                st.write(f"📈 **AI戦略の最終資産**: **${final_ai:,.2f}** (単純保有: ${final_buy_hold:,.2f})")
-                
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("🎯 モデル正答率", f"{accuracy * 100:.1f} %")
-                c2.metric("📊 シャープレシオ", f"{sharpe:.2f}")
-                c3.metric("📉 最大ドローダウン", f"{max_dd * 100:.1f} %")
-                c4.metric("🏆 トレード勝率", f"{win_rate:.1f} %")
-                
-                # 追加：トレード回数プロファイル
-                total_days = len(test_df)
-                long_days = len(test_df[test_df['AI_Signal'] == 1])
-                short_days = len(test_df[test_df['AI_Signal'] == 0])
-                if enable_short:
-                    st.info(f"💡 **運用プロファイル**: 全{total_days}営業日のうち、ロング(買い)ポジションを持った日数が **{long_days}** 日、ショート(空売り)が **{short_days}** 日です。相場下落時にも強力に利益を狙う攻撃的な設計です。")
-                else:
-                    st.info(f"💡 **運用プロファイル**: 全{total_days}営業日のうち、AIが上昇を予想してリスクを取り「買い」を持った日数は **{long_days}** 日 ({long_days/total_days*100:.1f}%) です。下落リスクを回避することでドローダウンを抑える守備的な設計です。")
+        # 追加：トレード回数プロファイル
+        total_days = len(test_df)
+        long_days = len(test_df[test_df['AI_Signal'] == 1])
+        short_days = len(test_df[test_df['AI_Signal'] == 0])
+        if enable_short:
+            st.info(f"💡 **運用プロファイル**: 全{total_days}営業日のうち、ロング(買い)ポジションを持った日数が **{long_days}** 日、ショート(空売り)が **{short_days}** 日です。相場下落時にも強力に利益を狙う攻撃的な設計です。")
+        else:
+            st.info(f"💡 **運用プロファイル**: 全{total_days}営業日のうち、AIが上昇を予想してリスクを取り「買い」を持った日数は **{long_days}** 日 ({long_days/total_days*100:.1f}%) です。下落リスクを回避することでドローダウンを抑える守備的な設計です。")
