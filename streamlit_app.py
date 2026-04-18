@@ -85,8 +85,13 @@ st.markdown("""
 
     /* === モバイル対応 (Mobile Responsive CSS) === */
     @media (max-width: 768px) {
+        /* サイドバーを開くボタン（ハンバーガーメニュー等）が隠れないように調整 */
+        header[data-testid="stHeader"] {
+            z-index: 99999 !important;
+            background-color: transparent !important;
+        }
         .block-container {
-            padding-top: 1.5rem !important;
+            padding-top: 4rem !important;
             padding-bottom: 2rem !important;
             padding-left: 0.8rem !important;
             padding-right: 0.8rem !important;
