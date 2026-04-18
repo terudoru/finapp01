@@ -23,19 +23,19 @@ from scripts.quant_engine import add_time_series_features, get_xgb_model
 import shap
 import matplotlib.pyplot as plt
 # --- ページ設定 ---
-st.set_page_config(page_title="高度株価分析＆AI予測ダッシュボード", page_icon="📈", layout="wide")
+st.set_page_config(page_title="株価分析＆AI予測ダッシュボード", page_icon="📈", layout="wide")
 
 # --- 🛰️ カスタムスタイル (CSS) ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Montserrat:wght@700&display=swap');
     
-    html, body, [class*="ViewContainer"] {
+    html, body, [class*="ViewContainer"], .stApp, p, span, div, label {
         font-family: 'Inter', sans-serif;
+        color: #ffffff !important;
     }
     .stApp {
-        background: radial-gradient(circle at 10% 20%, rgba(0, 0, 0, 0.95) 0%, rgba(15, 23, 42, 0.98) 90.2%);
-        color: #e2e8f0;
+        background: radial-gradient(circle at 10% 20%, rgba(15, 23, 42, 1) 0%, rgba(2, 6, 23, 1) 90.2%);
     }
     .stMetric {
         background: rgba(255, 255, 255, 0.03);
@@ -85,10 +85,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🛡️ 先進的株価予測プラットフォーム - AI & Quant Intelligence")
+st.title("🛡️ 株価予測プラットフォーム - AI & Quant Intelligence")
 st.markdown("""
 <div style="background: rgba(56, 189, 248, 0.1); border-left: 5px solid #38bdf8; padding: 15px; border-radius: 5px; margin-bottom: 25px;">
-    <strong>QUANT VIEW:</strong> 高度な機械学習（XGBoost）と世界の経済指標、マクロ感応度を統合したプロフェッショナル向けツールです。
+    <strong>QUANT VIEW:</strong> 機械学習（XGBoost）と世界の経済指標、マクロ感応度を統合したツールです。
 </div>
 """, unsafe_allow_html=True)
 
@@ -204,7 +204,7 @@ st.sidebar.markdown('---')
 use_news = st.sidebar.checkbox('📰 ニュース感情分析を予測に加味する', value=True)
 
 st.sidebar.markdown('---')
-st.sidebar.markdown('**🧠 高度な学習設定**')
+st.sidebar.markdown('**🧠 学習設定**')
 auto_tune = st.sidebar.checkbox('🤖 ハイパーパラメータ自動最適化 (Auto-Tune)', value=True, help='処理時間が数秒伸びますが精度が向上します。一斉スクリーナーの際は時間がかかるためオフを推奨します。')
 
 if app_mode == "📊 個別銘柄の詳細分析":
@@ -529,7 +529,7 @@ if app_mode == "⚙️ 設定":
 
     st.markdown("---")
     st.subheader("🤖 AI分析設定")
-    use_finbert_pref = st.checkbox("より高度なAI感情分析 (FinBERT) を使用する", value=(get_setting("use_finbert", "1") == "1"), help="オフにすると軽量なVADERを使用します。")
+    use_finbert_pref = st.checkbox("AI感情分析 (FinBERT) を使用する", value=(get_setting("use_finbert", "1") == "1"), help="オフにすると軽量なVADERを使用します。")
     if st.button("AI設定を保存"):
         update_setting("use_finbert", "1" if use_finbert_pref else "0")
         st.success("保存しました。")
@@ -1094,7 +1094,7 @@ if run_button:
                         st.write("銘柄情報の取得に失敗しました。詳細データがない可能性があります。")
 
                 
-                # --- 💡 プロフェッショナル・インサイト ---
+                # --- 💡 インサイト ---
                 insight_col1, insight_col2 = st.columns(2)
                 with insight_col1:
                     st.subheader("📅 企業イベント (予定)")
@@ -1167,7 +1167,7 @@ if run_button:
                         ticker_obj = yf.Ticker(ticker)
                         news_data = ticker_obj.news
                         if news_data and len(news_data) > 0:
-                            # FinBERTを使用した高度な分析
+                            # FinBERTを使用した分析
                             use_finbert = (get_setting("use_finbert", "1") == "1")
                             titles = [a.get('title', '') for a in news_data[:5] if a.get('title', '')]
                             adv_score, adv_mood = analyze_sentiment(titles, use_finbert=use_finbert)
@@ -1221,10 +1221,10 @@ if run_button:
                         - 🛡️ **損切りライン (Stop Loss)**: **`${stop_loss_price:.2f}`** （予想に反してこの価格まで下がったら、**必ず損切りして逃げる**）
                         """)
 
-                # --- Plotlyによる高度ローソク足 ＋ 過去のシグナル表示 ---
+                # --- Plotlyによるローソク足 ＋ 過去のシグナル表示 ---
                 st.markdown("---")
-                st.header("📉 高度テクニカルチャート & 売買シグナル")
-                st.markdown("ローソク足に加え、RSIやMACDなどの高度なプロ向け指標をマルチペインで確認できます。")
+                st.header("📉 テクニカルチャート & 売買シグナル")
+                st.markdown("ローソク足に加え、RSIやMACDなどの指標をマルチペインで確認できます。")
                 
                 col_chart_opts1, col_chart_opts2 = st.columns(2)
                 with col_chart_opts1:
@@ -1287,7 +1287,7 @@ if run_button:
                     fig.add_trace(go.Bar(x=df.index, y=macd_hist, name='Histogram', marker_color=np.where(macd_hist<0, 'red', 'green')), row=curr_row, col=1)
                     fig.update_yaxes(title_text="MACD", row=curr_row, col=1)
 
-                fig.update_layout(title=f'{ticker} 高度テクニカルチャート',
+                fig.update_layout(title=f'{ticker} テクニカルチャート',
                                   height=800,
                                   template="plotly_white",
                                   xaxis_rangeslider_visible=False,
@@ -1340,7 +1340,7 @@ if run_button:
                 eq_fig.update_layout(title='資産の推移 (Equity Curve)', yaxis_title='Account Balance', height=500, template="plotly_white")
                 st.plotly_chart(eq_fig, use_container_width=True)
                 
-                # 高度な統計指標の計算
+                # 統計指標の計算
                 strat_returns = test_df['Strategy_Return']
                 if not strat_returns.empty:
                     sharpe = (strat_returns.mean() / strat_returns.std()) * np.sqrt(252) if strat_returns.std() != 0 else 0

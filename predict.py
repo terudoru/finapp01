@@ -33,7 +33,7 @@ def fetch_vix(start_date, end_date):
         return pd.DataFrame()
 
 def main():
-    print("🌟 株価予測高度化プロジェクト (XGBoost版 CLI) 🌟\n")
+    print("🌟 株価予測プロジェクト (XGBoost版 CLI) 🌟\n")
     ticker = 'AAPL'
     
     end_date = datetime.date.today()
@@ -47,7 +47,7 @@ def main():
         df['VIX_Close'] = df['VIX_Close'].ffill()
     
     # 2. 特徴量生成 & ターゲット生成 (quant_engineを使用)
-    print("高度なテクニカル指標 (SMA, RSI, MACD, BB, ATR, Stoch, OBV) を計算中...")
+    print("テクニカル指標 (SMA, RSI, MACD, BB, ATR, Stoch, OBV) を計算中...")
     df, features = add_time_series_features(df, use_sma=True, use_rsi=True, use_macd=True, use_bb=True)
     
     if 'VIX_Close' in df.columns:
