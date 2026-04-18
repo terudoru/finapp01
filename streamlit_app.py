@@ -4,6 +4,7 @@ import quantstats as qs
 import pandas_datareader as pdr
 import yfinance as yf
 import pandas as pd
+import pytz
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
@@ -27,6 +28,12 @@ import shap
 import matplotlib.pyplot as plt
 # --- ページ設定 ---
 st.set_page_config(page_title="株価分析＆AI予測ダッシュボード", page_icon="📈", layout="wide")
+
+@st.cache_resource(ttl=3600, show_spinner=False)
+def train_and_cache_model(ticker, timeframe, start_date, end_date, auto_tune, _X_train, _y_train):
+    from scripts.quant_engine import get_xgb_model
+    return get_xgb_model(_X_train, _y_train, auto_tune)
+
 
 # --- 🛰️ カスタムスタイル (CSS) ---
 st.markdown("""
@@ -1627,7 +1634,7 @@ if run_button:
                         
                         if news_data:
                             titles = [item.get('title', '') for item in news_data[:5]]
-                            adv_score, adv_mood = analyze_sentiment(titles, use_finbert=use_finbert)
+                            adv_score, adv_mood = analyze_sentiment(titles, use_finbert=(get_setting("use_finbert", "1") == "1"))
                             
                             st.metric("市場感情(AI)", adv_mood, f"スコア: {adv_score:+.2f}")
                             
