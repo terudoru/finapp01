@@ -617,7 +617,7 @@ if app_mode == "💼 ポートフォリオ管理":
                 fig_pie = px.pie(sdf, values='Value', names='Sector', 
                                  title="セクター別・評価額構成比",
                                  hole=0.4,
-                                 color_discrete_sequence=px.colors.sequential.Skyblue_r)
+                                 color_discrete_sequence=px.colors.sequential.Blues_r)
                 fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                 fig_pie.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=450)
                 st.plotly_chart(fig_pie, use_container_width=True)
