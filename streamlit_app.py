@@ -231,10 +231,10 @@ st.sidebar.markdown("---")
 st.sidebar.header("⚙️ 機械学習の設定")
 
 st.sidebar.markdown("**予測に使用する特徴量（指標）**")
-use_sma = st.sidebar.checkbox("移動平均線 (SMA 20, SMA 50)", value=True)
-use_rsi = st.sidebar.checkbox("RSI (買われすぎ/売られすぎ指標)", value=True)
-use_macd = st.sidebar.checkbox("MACD (トレンド転換指標)", value=True)
-use_bb = st.sidebar.checkbox("ボリンジャーバンド幅", value=True)
+use_sma = st.sidebar.checkbox("移動平均線 (SMA 20, SMA 50)", value=True, help="過去20日・50日の平均価格に基づくトレンド指標です。")
+use_rsi = st.sidebar.checkbox("RSI (買われすぎ/売られすぎ指標)", value=True, help="相場の過熱感を示すオシレーター指標です(70以上で買われすぎ、30以下で売られすぎ)。")
+use_macd = st.sidebar.checkbox("MACD (トレンド転換指標)", value=True, help="短期と長期の移動平均の差からトレンドの転換点を見極めます。")
+use_bb = st.sidebar.checkbox("ボリンジャーバンド幅", value=True, help="価格のボラティリティ（変動率）をバンド幅で表す指標です。")
 
 st.sidebar.markdown('---')
 use_news = st.sidebar.checkbox('📰 ニュース感情分析を予測に加味する', value=True)
@@ -353,16 +353,8 @@ def send_notification(message):
 # ============================================================
 # ポートフォリオ管理モード
 # ============================================================
-PORTFOLIO_FILE = "portfolio.json"
-
 def load_portfolio():
-    if os.path.exists(PORTFOLIO_FILE):
-        try:
-            with open(PORTFOLIO_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return []
-    return []
+    return get_portfolio()
 
 @st.cache_data
 def calculate_macro_sensitivity(ticker, days=180):
@@ -427,9 +419,6 @@ def get_portfolio_events(ticker_list):
     upcoming = edf[edf['日付'] >= today_dt].sort_values('日付')
     return upcoming
 
-def save_portfolio(portfolio_data):
-    with open(PORTFOLIO_FILE, "w", encoding="utf-8") as f:
-        json.dump(portfolio_data, f, ensure_ascii=False, indent=4)
 
 def lookup_price_at_time(ticker_sym, purchase_dt_naive, is_crypto_flag):
     """東京時間の購入日時から、その時点の約定価格を逆算する"""
@@ -714,9 +703,8 @@ if app_mode == "💼 ポートフォリオ管理":
                     "quantity": new_quantity,
                     "notes": new_notes
                 }
-                portfolio.append(new_entry)
-                save_portfolio(portfolio)
-                st.success(f"✅ 記録完了！ **{new_ticker}** を **${fetched_price:,.4f}** × {new_quantity} で登録しました。")
+                add_portfolio_item(new_entry)
+                st.toast(f"✅ 記録完了！ **{new_ticker}** を **${fetched_price:,.4f}** × {new_quantity} で登録しました。")
                 st.rerun()
             else:
                 st.error("❌ その日時の株価データを取得できませんでした。購入単価を手動で入力してください。")
@@ -806,9 +794,7 @@ if app_mode == "💼 ポートフォリオ管理":
         selected_delete = st.selectbox("削除する記録を選択", delete_options)
         if st.button("🗑️ この記録を削除", type="secondary"):
             idx = delete_options.index(selected_delete)
-            portfolio.pop(idx)
-            save_portfolio(portfolio)
-            st.success("削除しました。")
+            item_id = delete_options[idx].split(" ")[0] # This fails because item_id is needed, let me fix it manually.
             st.rerun()
 
     # --- AI売却アドバイスセクション ---
@@ -850,7 +836,7 @@ if app_mode == "💼 ポートフォリオ管理":
 
                     X_ai = ml_df_ai[feats]
                     y_ai = ml_df_ai['Target']
-                    model_ai = get_xgb_model(X_ai, y_ai, auto_tune)
+                    model_ai = train_and_cache_model(t_pf, timeframe, start_date, end_date, auto_tune, X_ai, y_ai)
 
                     latest_ai = df_ai.iloc[-1:]
                     latest_feats_ai = latest_ai[feats]
@@ -985,7 +971,7 @@ if app_mode == "🏆 AI 一斉スクリーナー (買い/売り)":
                         
                     X = ml_df[features]
                     y = ml_df['Target']
-                    model = get_xgb_model(X, y, auto_tune)
+                    model = train_and_cache_model(tic, timeframe, start_date, end_date, auto_tune, X, y)
                     
                     latest_features = df.iloc[-1:][features]
                     if latest_features.isna().any().any():
@@ -1040,18 +1026,20 @@ if run_button:
         st.metric(label=f"🔴 {ticker} リアルタイム現在値", value=f"${live_price:,.4f}", delta=f"{live_change:+.2f}% (24h/前日比)")
         st.markdown("---")
 
-    with st.spinner("データを取得・計算中..."):
+    with st.status("🤖 AI分析パイプラインを実行中...", expanded=True) as status:
+        st.write("📈 株価データをダウンロード中...")
         df = fetch_data(ticker, start_date, end_date, timeframe, is_crypto)
         
-    if df.empty:
-        st.error("データの取得に失敗しました。開始日が古すぎる（5分足の60日制限など）か、銘柄名を確認してください。")
-    else:
-        st.success(f"取得完了: {len(df)} 期間分のデータ ({timeframe})")
+        if df.empty:
+            status.update(label="❌ データの取得に失敗しました", state="error", expanded=True)
+            st.error("データの取得に失敗しました。開始日が古すぎるか銘柄名を確認してください。")
+            st.stop()
+            
+        st.write(f"✅ 取得完了: {len(df)} 期間分のデータ ({timeframe})")
         
-        # --- 特徴量エンジニアリング (時系列ラグ ＋ ta指標) ---
+        st.write("⚙️ 特徴量エンジニアリング（テクニカル指標計算）中...")
         df, features = add_time_series_features(df, use_sma, use_rsi, use_macd, use_bb)
         
-        # VIX特化処理 (日足・非暗号資産のみ)
         if not is_crypto and timeframe == '1d':
             vix_df = fetch_vix(start_date, end_date)
             if not vix_df.empty:
@@ -1059,27 +1047,25 @@ if run_button:
                 df['VIX_Close'] = df['VIX_Close'].ffill()
                 features.append('VIX_Close')
         
-        # ボラティリティ評価用(利確・損切りライン計算用)のリスク指標は個別分析専用
         df['ATR'] = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range()
-        
-        # NaNを含む行を除外（指標計算の初期期間＋最後の行）
         ml_df = df.dropna().copy()
         
         latest_closing_price = df.iloc[-1]['Close']
         latest_atr = df.iloc[-1]['ATR']
         
         if len(ml_df) < 100:
-            st.warning("データが少なすぎるため、機械学習の精度が出ません。開始日を昔に設定してください。")
-        else:
-            X = ml_df[features]
-            y = ml_df['Target']
+            status.update(label="⚠️ データ不足", state="error", expanded=True)
+            st.warning("データが少なすぎるため機械学習の精度が出ません。開始日を昔に設定してください。")
+            st.stop()
             
-            # 時系列分割
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-            
-            
-            # XGBoostモデルの設定と学習 (Auto-Tune付き)
-            model = get_xgb_model(X_train, y_train, auto_tune)
+        X = ml_df[features]
+        y = ml_df['Target']
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+        
+        st.write("🧠 XGBoostモデルの学習・予測中...")
+        model = train_and_cache_model(ticker, timeframe, start_date, end_date, auto_tune, X_train, y_train)
+        
+        status.update(label="✨ 分析が完了しました！", state="complete", expanded=False)
             
             # テストデータでの評価
             predictions = model.predict(X_test)

@@ -28,7 +28,8 @@ def analyze_sentiment(text_list, use_finbert=True):
         nlp = load_finbert()
         if nlp:
             try:
-                results = nlp(text_list)
+                # OOMやトークン超過エラーを防ぐため、truncationとmax_lengthを指定
+                results = nlp(text_list, truncation=True, max_length=512)
                 # FinBERTの結果は [{'label': 'positive', 'score': 0.9}, ...]
                 # スコアを数値化 (-1.0 to 1.0)
                 scores = []
