@@ -1115,22 +1115,51 @@ if app_mode == "💡 おすすめ銘柄推薦":
                     else:
                         analyst_recom = "Crypto"
 
-                    # ============== フィルタリング条件 ==============
-                    # 短期AI予測が > 50% であり、仮想通貨以外は上値余地が > 0% であること
-                    if prob_up >= 0.50 and (is_cry or upside > 0):
-                        combined_score = (prob_up * 100) + (upside * 100 if upside > 0 else 0)
+                    # ============== 最適購入タイミングの算出 ==============
+                    # RSIとMACDの勢いから、押し目や底打ち（何日後に買うべきか）をヒューリスティックに判定
+                    latest_rsi = df.iloc[-1].get('RSI', 50)
+                    prev_rsi = df.iloc[-2].get('RSI', 50) if len(df) > 1 else 50
+                    latest_macd = df.iloc[-1].get('MACD', 0)
+                    latest_sig = df.iloc[-1].get('MACD_Signal', 0)
+                    
+                    wait_days = 0 # デフォルトは即時購入
+                    # 買われすぎの場合は調整が来るため数日待つ
+                    if latest_rsi > 70:
+                        wait_days = 4
+                    elif 50 < latest_rsi <= 70:
+                        wait_days = 2 if latest_rsi < prev_rsi else 1
+                    else: # 売られすぎ、または通常時
+                        if latest_rsi < 30:
+                            # 底打ち反転を狙うなら即時、まだ下落中なら少し待つ
+                            wait_days = 0 if latest_rsi > prev_rsi else 1
+                        else:
+                            wait_days = 1 if latest_rsi < prev_rsi else 0
+                            
+                    # MACDがシグナルを下回っている（デッドクロス中）なら1日追加で待機
+                    if latest_macd < latest_sig:
+                        wait_days += 1
                         
-                        results.append({
-                            "銘柄名": item["name"],
-                            "ティッカー": tic,
-                            "カテゴリ": item["category"].split(" ", 1)[-1] if " " in item["category"] else item["category"],
-                            "AI上昇確率": round(prob_up * 100, 1),
-                            "上値余地(アナリスト)": f"{upside * 100:+.1f}%" if not is_cry and target_price_str != "N/A" else "N/A",
-                            "アナリスト評価": analyst_recom,
-                            "現在価格": f"${curr_price:,.2f}" if "日本株" not in item["category"] else f"¥{curr_price:,.1f}",
-                            "目標株価": target_price_str,
-                            "推移スコア": combined_score
-                        })
+                    wait_days = min(max(wait_days, 0), 5) # 最大5日まで
+                    buy_timing_str = "🚀 今すぐ" if wait_days == 0 else f"⏳ 約{wait_days}日後"
+
+                    # ============== スコア計算 ==============
+                    # 全ての銘柄を候補とし、AI確率をベースに上値余地があればボーナス点を加算
+                    combined_score = prob_up * 100
+                    if not is_cry and upside > 0:
+                        combined_score += (upside * 50) # Upside 10% = 5 point bonus
+                        
+                    results.append({
+                        "銘柄名": item["name"],
+                        "ティッカー": tic,
+                        "カテゴリ": item["category"].split(" ", 1)[-1] if " " in item["category"] else item["category"],
+                        "AI上昇確率": round(prob_up * 100, 1),
+                        "最適購入タイミング": buy_timing_str,
+                        "上値余地(アナリスト)": f"{upside * 100:+.1f}%" if not is_cry and target_price_str != "N/A" else "N/A",
+                        "アナリスト評価": analyst_recom,
+                        "現在価格": f"${curr_price:,.2f}" if "日本株" not in item["category"] else f"¥{curr_price:,.1f}",
+                        "目標株価": target_price_str,
+                        "推移スコア": combined_score
+                    })
                 except Exception as e:
                     pass
                     
@@ -1141,16 +1170,24 @@ if app_mode == "💡 おすすめ銘柄推薦":
             
             if results:
                 res_df = pd.DataFrame(results)
-                res_df = res_df.sort_values(by="推移スコア", ascending=False).reset_index(drop=True)
-                res_df = res_df.drop(columns=["推移スコア"]) # 内部スコア列は隠す
                 
-                st.success("🎉 おすすめ銘柄の抽出が完了しました！")
-                st.dataframe(res_df, use_container_width=True)
+                # スコア順に全体をソートし、上位5銘柄を推薦として抽出
+                # ただし、上昇予測が弱すぎる(50%未満)ものは除外
+                res_df = res_df[res_df["AI上昇確率"] >= 50.0]
+                res_df = res_df.sort_values(by="推移スコア", ascending=False).head(5).reset_index(drop=True)
                 
-                csv_results = res_df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("📥 推薦リストをCSV形式で保存", data=csv_results, file_name="ai_recommended_stocks.csv", mime="text/csv")
+                if not res_df.empty:
+                    res_df = res_df.drop(columns=["推移スコア"]) # 内部スコア列は隠す
+                    
+                    st.success("🎉 全対象銘柄から、スコア上位のおすすめ銘柄を抽出しました！")
+                    st.dataframe(res_df, use_container_width=True)
+                    
+                    csv_results = res_df.to_csv(index=False).encode('utf-8-sig')
+                    st.download_button("📥 推薦リストをCSV形式で保存", data=csv_results, file_name="ai_recommended_stocks.csv", mime="text/csv")
+                else:
+                    st.warning("上昇予測が50%を超える銘柄が見つかりませんでした。相場全体が下落トレンドの可能性があります。")
             else:
-                st.warning("現在の相場環境で、基準（確率50%超＆上値余地確保）を満たす強い推薦銘柄は見つかりませんでした。")
+                st.warning("解析に成功した銘柄がありませんでした。")
         st.stop()
 
 if run_button:
