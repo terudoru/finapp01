@@ -30,9 +30,9 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="株価分析＆AI予測ダッシュボード", page_icon="📈", layout="wide")
 
 @st.cache_resource(ttl=3600, show_spinner=False)
-def train_and_cache_model(ticker, timeframe, start_date, end_date, auto_tune, _X_train, _y_train):
+def train_and_cache_model(ticker, timeframe, start_date, end_date, auto_tune, X_train, y_train):
     from scripts.quant_engine import get_xgb_model
-    return get_xgb_model(_X_train, _y_train, auto_tune)
+    return get_xgb_model(X_train, y_train, auto_tune)
 
 
 # --- 🛰️ カスタムスタイル (CSS) ---
@@ -242,7 +242,7 @@ timeframe_opts = {
 }
 selected_tf_label = st.sidebar.selectbox("データ間隔", list(timeframe_opts.keys()), index=3) # デフォルトは「1日 (日足)」
 timeframe = timeframe_opts[selected_tf_label]
-is_crypto = (selected_category == "🪙 仮想通貨")
+is_crypto = (selected_category == "🪙 仮想通貨") or ("/" in ticker)
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ 機械学習の設定")
@@ -1012,6 +1012,10 @@ if app_mode == "🏆 AI 一斉スクリーナー (買い/売り)":
                     if not is_cry:
                         vix_df = fetch_vix(start_date, end_date)
                         if not vix_df.empty:
+                            if df.index.tz is not None:
+                                df.index = df.index.tz_localize(None)
+                            if vix_df.index.tz is not None:
+                                vix_df.index = vix_df.index.tz_localize(None)
                             df = df.sort_index()
                             vix_df = vix_df.sort_index()
                             df = pd.merge_asof(df, vix_df[['VIX_Close']], left_index=True, right_index=True, direction='backward')
@@ -1119,6 +1123,10 @@ if app_mode == "💡 おすすめ銘柄推薦":
                     if not is_cry:
                         vix_df = fetch_vix(start_date, end_date)
                         if not vix_df.empty:
+                            if df.index.tz is not None:
+                                df.index = df.index.tz_localize(None)
+                            if vix_df.index.tz is not None:
+                                vix_df.index = vix_df.index.tz_localize(None)
                             df = df.sort_index()
                             vix_df = vix_df.sort_index()
                             df = pd.merge_asof(df, vix_df[['VIX_Close']], left_index=True, right_index=True, direction='backward')
@@ -1273,10 +1281,16 @@ if run_button:
         st.write("⚙️ 特徴量エンジニアリング（テクニカル指標計算）中...")
         df, features = add_time_series_features(df, use_sma, use_rsi, use_macd, use_bb)
         
-        if not is_crypto and timeframe == '1d':
+        if not is_crypto:
             vix_df = fetch_vix(start_date, end_date)
             if not vix_df.empty:
-                df = df.join(vix_df, how='left')
+                if df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+                if vix_df.index.tz is not None:
+                    vix_df.index = vix_df.index.tz_localize(None)
+                df = df.sort_index()
+                vix_df = vix_df.sort_index()
+                df = pd.merge_asof(df, vix_df[['VIX_Close']], left_index=True, right_index=True, direction='backward')
                 df['VIX_Close'] = df['VIX_Close'].ffill()
                 features.append('VIX_Close')
         
@@ -1286,7 +1300,7 @@ if run_button:
         latest_closing_price = df.iloc[-1]['Close']
         latest_atr = df.iloc[-1]['ATR']
         
-        if len(ml_df) < 100:
+        if len(ml_df) < (10 if timeframe == '1y' else 30):
             status.update(label="⚠️ データ不足", state="error", expanded=True)
             st.warning("データが少なすぎるため機械学習の精度が出ません。開始日を昔に設定してください。")
             st.stop()
