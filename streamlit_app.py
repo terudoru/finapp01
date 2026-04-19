@@ -1231,9 +1231,9 @@ if app_mode == "💡 おすすめ銘柄推薦":
                         "目標株価": target_price_str,
                         "推移スコア": combined_score
                     })
-                    except Exception as e:
-                        st.error(f"❌ {item['name']} ({tic}) の解析中にエラーが発生しました: {e}")
-                        continue
+                except Exception as e:
+                    st.error(f"❌ {item['name']} ({tic}) の解析中にエラーが発生しました: {e}")
+                    continue
                     
                 progress_bar.progress((i + 1) / len(all_tickers))
             
