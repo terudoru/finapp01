@@ -1115,7 +1115,11 @@ if app_mode == "💡 おすすめ銘柄推薦":
                 
                 try:
                     df = fetch_data(tic, start_date, end_date, timeframe, is_cry)
-                    if df.empty or len(df) < (5 if timeframe == '1y' else 30):
+                    if df.empty:
+                        st.info(f"ℹ️ {item['name']}: データの取得に失敗したためスキップしました。")
+                        continue
+                    if len(df) < (5 if timeframe == '1y' else 30):
+                        st.info(f"ℹ️ {item['name']}: データ本数が不足（{len(df)}本）しているためスキップしました。30本以上必要です。")
                         continue
                         
                     df, features = add_time_series_features(df, use_sma, use_rsi, use_macd, use_bb)
@@ -1135,6 +1139,7 @@ if app_mode == "💡 おすすめ銘柄推薦":
                         
                     ml_df = df.dropna().copy()
                     if len(ml_df) < (3 if timeframe == '1y' else 10):
+                        st.info(f"ℹ️ {item['name']}: テクニカル指標計算後の有効データが不足しているためスキップしました。")
                         continue
                         
                     X = ml_df[features]
@@ -1226,8 +1231,9 @@ if app_mode == "💡 おすすめ銘柄推薦":
                         "目標株価": target_price_str,
                         "推移スコア": combined_score
                     })
-                except Exception as e:
-                    pass
+                    except Exception as e:
+                        st.error(f"❌ {item['name']} ({tic}) の解析中にエラーが発生しました: {e}")
+                        continue
                     
                 progress_bar.progress((i + 1) / len(all_tickers))
             
@@ -1238,17 +1244,14 @@ if app_mode == "💡 おすすめ銘柄推薦":
                 res_df = pd.DataFrame(results)
                 
                 # スコア順に全体をソートし、上位5銘柄を推薦として抽出
-                # (相場が悪く確率が低めでも、その中で相対的に期待値が高い上位を表示する)
                 res_df = res_df.sort_values(by="推移スコア", ascending=False).head(5).reset_index(drop=True)
                 
                 if not res_df.empty:
-                    # 1位のAI確率が50%未満の場合は注記を追加
                     best_prob = res_df.iloc[0]["AI上昇確率"]
                     if best_prob < 50.0:
                         st.info("💡 **AI分析ノート**: 現在の相場環境では全体的に上昇予測確率が低め（50%未満）ですが、その中で比較的強いスコアを持つ上位銘柄を抽出しました。")
                         
-                    res_df = res_df.drop(columns=["推移スコア"]) # 内部スコア列は隠す
-                    
+                    res_df = res_df.drop(columns=["推移スコア"])
                     st.success("🎉 全対象銘柄から、スコア上位のおすすめ銘柄を抽出しました！")
                     st.dataframe(res_df, use_container_width=True)
                     
@@ -1257,7 +1260,8 @@ if app_mode == "💡 おすすめ銘柄推薦":
                 else:
                     st.warning("推奨可能な銘柄が見つかりませんでした。")
             else:
-                st.warning("解析に成功した銘柄がありませんでした。開始日を調整するかブックマークを確認してください。")
+                st.error("🚨 有効な推薦結果が0件でした。")
+                st.info("以下の原因が考えられます：\n1. 開始日が新しすぎて学習データが不足している（30日間以上のデータが必要です）\n2. タイムゾーンの不一致によりVIXデータとの結合に失敗している\n3. ネットワークエラーにより株価データの取得に失敗している")
         st.stop()
 
 if run_button:
